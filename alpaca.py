@@ -50,14 +50,23 @@ def get(host, path, **params):
         raise SystemExit(f"Could not reach Alpaca for {path}: {exc.reason if hasattr(exc, 'reason') else type(exc).__name__}") from None
 
 
-def bars(symbols, start, feed):
+def completed_bar_window():
     now = datetime.now(timezone.utc)
     today = now.astimezone(NY).date()
-    end = now - timedelta(minutes=16)
-    calendar = get(PAPER, "/v2/calendar", start=today, end=today)
-    completed_today = calendar and end >= datetime.fromisoformat(
-        f"{today}T{calendar[0]['close']}"
-    ).replace(tzinfo=NY)
+    cutoff = now - timedelta(minutes=16)
+    calendar = get(PAPER, "/v2/calendar", start=today - timedelta(days=14), end=today)
+    closes = (
+        datetime.fromisoformat(f"{session['date']}T{session['close']}").replace(tzinfo=NY)
+        for session in calendar
+    )
+    latest = max((close for close in closes if close <= cutoff), default=None)
+    if latest is None:
+        raise SystemExit("Alpaca calendar returned no recently completed sessions.")
+    return latest.date(), cutoff
+
+
+def bars(symbols, start, feed, *, window=None):
+    completed_day, end = window if window is not None else completed_bar_window()
     params = dict(symbols=",".join(symbols), timeframe="1Day", start=start,
                   end=end.isoformat(), adjustment="all", feed=feed, limit=10000)
     while True:
@@ -65,7 +74,7 @@ def bars(symbols, start, feed):
         for symbol, rows in (page["bars"] or {}).items():
             for row in rows:
                 day = datetime.fromisoformat(row["t"]).astimezone(NY).date()
-                if day < today or (day == today and completed_today):
+                if day <= completed_day:
                     yield (day, symbol, *(row[key] for key in ("o", "h", "l", "c", "v")))
         token = page.get("next_page_token")
         if not token:
