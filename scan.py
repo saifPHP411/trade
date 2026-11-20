@@ -1,9 +1,9 @@
 """List daily long signals. Market-data requests are read-only."""
 import argparse
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
-from alpaca import NY, ROOT, bars
+from alpaca import NY, ROOT, bars, completed_bar_window
 from signals import RULES, Bar, candidates, load_prices, rules, universe
 
 if __name__ == "__main__":
@@ -20,25 +20,24 @@ if __name__ == "__main__":
         parser.error("There is no selected entry rule. Use --rule to preview a candidate.")
     symbols = universe()
     if args.live:
+        day, cutoff = completed_bar_window()
+        watched = sorted(set(symbols) | {"SPY"})
         prices = defaultdict(dict)
-        for day, symbol, open_price, high, low, close, _ in bars(
-            sorted(set(symbols) | {"SPY"}), datetime.now(NY).date() - timedelta(days=460), args.feed
+        start = cutoff.astimezone(NY).date() - timedelta(days=460)
+        for session, symbol, open_price, high, low, close, _ in bars(
+            watched, start, args.feed, window=(day, cutoff)
         ):
-            prices[symbol][day] = Bar(day, open_price, high, low, close)
+            prices[symbol][session] = Bar(session, open_price, high, low, close)
+        missing = [symbol for symbol in watched if day not in prices.get(symbol, {})]
+        if missing:
+            raise SystemExit(f"Missing bars for expected session {day}: {', '.join(missing)}.")
     else:
+        day = args.date
         prices = load_prices(ROOT / "prices.csv")
-    sessions = prices.get("SPY", {})
-    if not sessions:
-        raise SystemExit("No SPY sessions. Cannot verify the scan date.")
-    day = max(sessions) if args.live else args.date
-    if day not in sessions:
-        raise SystemExit(f"No completed market session for {day}.")
+        if day not in prices.get("SPY", {}):
+            raise SystemExit(f"No completed market session for {day}.")
     print(f"{entry} · {day} · indicative levels based on last close")
     print("symbol     close      ATR     stop   target  signal")
-    if args.live:
-        missing = [symbol for symbol in symbols if day not in prices.get(symbol, {})]
-        if missing:
-            raise SystemExit("Latest session bars are missing for " + ", ".join(missing) + ".")
     picks = [
         item for item in candidates(prices, symbols)[entry].get(day, [])
         if item[2] - stop * item[3] > 0

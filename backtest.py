@@ -56,15 +56,22 @@ def simulate(rule, signals, prices, sessions, starting_cash, settings):
                 sell(symbol, bar.open, day, "time limit")
             elif bar.open <= position.stop or bar.open >= position.target:
                 sell(symbol, bar.open, day, "gap through stop or target")
-        for _, symbol, close, atr, _ in pending:
+        opening_equity = cash + sum(
+            position.shares * prices[symbol][day].open
+            for symbol, position in positions.items()
+        )
+        if opening_equity <= previous_equity * (1 - daily_limit):
+            pending = []
+        for _, symbol, _, atr, _ in pending:
             if len(positions) >= cap:
                 break
             if symbol in positions:
                 continue
             bar = prices[symbol][day]
-            shares = int(previous_equity * size / close)
+            cost_per_share = bar.open * (1 + COST)
+            shares = math.floor(opening_equity * size / cost_per_share)
             stop_price = bar.open - stop * atr
-            total = shares * bar.open * (1 + COST)
+            total = shares * cost_per_share
             if shares > 0 and stop_price > 0 and total <= cash:
                 positions[symbol] = Position(shares, day, index, bar.open, stop_price, bar.open + target * atr)
                 cash -= total
