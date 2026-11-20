@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "alpaca": {
+      "command": "python3",
+      "args": [
+        "alpaca.py",
+        "mcp"
+      ]
+    }
+  }
+}
