@@ -1,0 +1,6 @@
+.env
+logs/
+prices.csv
+trades.csv
+equity_curves.png
+__pycache__/
