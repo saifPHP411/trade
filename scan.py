@@ -1,7 +1,7 @@
 """List daily long signals. Market-data requests are read-only."""
 import argparse
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from alpaca import NY, ROOT, bars, completed_bar_window
 from signals import RULES, Bar, candidates, load_prices, rules, universe
@@ -13,7 +13,10 @@ if __name__ == "__main__":
     source.add_argument("--date", type=date.fromisoformat, help="replay a session from prices.csv")
     parser.add_argument("--rule", choices=RULES, help="preview a research candidate")
     parser.add_argument("--feed", choices=("sip", "iex"), default="sip")
+    parser.add_argument("--today", action="store_true", help="skip unless today's US session has closed")
     args = parser.parse_args()
+    if args.today and not args.live:
+        parser.error("--today requires --live.")
     _, stop, target, _, _, _, entry = rules()
     entry = args.rule or entry
     if entry not in RULES:
@@ -21,6 +24,9 @@ if __name__ == "__main__":
     symbols = universe()
     if args.live:
         day, cutoff = completed_bar_window()
+        if args.today and day != datetime.now(NY).date():
+            print("No completed US market session today. Scan skipped.")
+            raise SystemExit(0)
         watched = sorted(set(symbols) | {"SPY"})
         prices = defaultdict(dict)
         start = cutoff.astimezone(NY).date() - timedelta(days=460)

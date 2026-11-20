@@ -74,6 +74,23 @@ class ScannerFreshnessTests(unittest.TestCase):
         self.assertEqual(rows, [(completed, "SPY", 100, 101, 99, 100, 1000)])
         self.assertEqual(get.call_args.kwargs["page_token"], "next")
 
+    def test_today_scan_skips_a_market_holiday(self):
+        last_session = date(2025, 11, 26)
+        holiday = datetime(2025, 11, 27, 22, tzinfo=timezone.utc)
+        scanner = Path(alpaca.ROOT) / "scan.py"
+        output = io.StringIO()
+        with patch("datetime.datetime", wraps=datetime) as clock, \
+                patch.object(alpaca, "completed_bar_window", return_value=(last_session, holiday)), \
+                patch.object(alpaca, "bars") as fetch_bars, \
+                patch("sys.argv", [str(scanner), "--live", "--today", "--rule", "breakout"]), \
+                redirect_stdout(output):
+            clock.now.return_value = holiday.astimezone(alpaca.NY)
+            with self.assertRaises(SystemExit) as result:
+                runpy.run_path(str(scanner), run_name="__main__")
+        self.assertEqual(result.exception.code, 0)
+        fetch_bars.assert_not_called()
+        self.assertIn("Scan skipped", output.getvalue())
+
     def test_scanner_rejects_stale_data_before_printing_signals(self):
         expected = date(2025, 11, 28)
         stale = date(2025, 11, 26)
