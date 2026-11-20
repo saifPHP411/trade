@@ -23,3 +23,7 @@ Claude Code can open this folder and read setup-progress.md to continue. The inc
 Deploy this branch using the included Dockerfile. Set the cron schedule to `0 22 * * 1-5` (22:00 UTC on US weekdays) and select the Never restart policy. The container previews the breakout rule after the closing bell and skips days without a completed US market session. Read signals, errors, and skipped runs in the Railway logs.
 
 In the scanner service's Variables tab, set `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` with keys from Alpaca Paper. The job uses read-only market data and does not submit orders.
+
+## Railway dashboard
+
+Deploy a separate service from the dashboard branch with start command `python -u dashboard.py` and healthcheck `/health`. Set `DASHBOARD_PASSWORD` and use the username `paper`. The service needs Alpaca Paper keys in `ALPACA_API_KEY` and `ALPACA_SECRET_KEY`. These can be references to the scanner's service variables. The dashboard displays account data, equity history, positions, fills and open orders. All broker requests use GET.

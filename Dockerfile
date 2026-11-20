@@ -5,3 +5,6 @@ RUN apt-get update \
 WORKDIR /app
 COPY alpaca.py scan.py signals.py rules.md stocks.txt ./
 CMD ["python", "-u", "scan.py", "--live", "--today", "--rule", "breakout", "--feed", "sip"]
+
+COPY dashboard.py ./
+COPY dashboard_ui ./dashboard_ui

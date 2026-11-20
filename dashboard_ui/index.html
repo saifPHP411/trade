@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#170d16">
+<title>Trade | لوحة Alpaca Paper</title>
+<link rel="stylesheet" href="/style.css">
+<script defer src="/app.js"></script>
+</head>
+<body>
+<header class="site-header">
+  <div class="brand"><span class="mark" aria-hidden="true">T</span><span>Trade <small>Alpaca Paper</small></span></div>
+  <nav aria-label="أقسام اللوحة"><a href="#overview">نظرة عامة</a><a href="#positions">المراكز</a><a href="#trades">الصفقات</a></nav>
+  <span class="tag"><i></i> حساب تجريبي</span>
+</header>
+<main id="overview">
+  <div class="intro">
+    <div><p class="eyebrow">محفظة الأسهم الأمريكية</p><h1>نظرة على حسابك</h1></div>
+    <div class="actions"><button id="refresh" type="button">تحديث البيانات <span aria-hidden="true">↻</span></button><span id="update" role="status">جاري التحميل…</span></div>
+  </div>
+  <div id="error" class="warning" role="status" hidden></div>
+  <section class="metrics" aria-label="ملخص الحساب">
+    <article class="metric primary"><span>قيمة المحفظة</span><strong id="equity" dir="ltr">—</strong><small>الدولار الأمريكي</small></article>
+    <article class="metric"><span>التغيّر اليومي</span><strong id="delta" dir="ltr">—</strong><small id="pct" dir="ltr">—</small></article>
+    <article class="metric"><span>الرصيد النقدي</span><strong id="cash" dir="ltr">—</strong><small>النقد المتاح في الحساب</small></article>
+    <article class="metric"><span>القوة الشرائية</span><strong id="buying" dir="ltr">—</strong><small>حسب Alpaca Paper</small></article>
+  </section>
+  <section class="panel chart-panel" aria-labelledby="chart-title">
+    <header class="section-head"><div><h2 id="chart-title">أداء المحفظة</h2><p>الرصيد والأرباح والخسائر حسب سجل Alpaca</p></div><div class="filters">
+      <div class="switch" aria-label="المقياس"><button type="button" data-metric="equity" aria-pressed="true">الرصيد</button><button type="button" data-metric="pnl" aria-pressed="false">الربح والخسارة</button></div>
+      <div class="switch" aria-label="الفترة"><button type="button" data-period="1W" aria-pressed="false">أسبوع</button><button type="button" data-period="1M" aria-pressed="true">شهر</button><button type="button" data-period="3M" aria-pressed="false">3 أشهر</button></div>
+    </div></header>
+    <div class="chart"><canvas id="performance" role="img" aria-label="منحنى أداء المحفظة" hidden></canvas><p id="chart-empty">جاري تحميل السجل…</p></div>
+    <div id="chart-detail" class="chart-detail" aria-live="polite"></div>
+  </section>
+  <section id="positions" class="panel">
+    <header class="section-head"><div><h2>المراكز المفتوحة <span class="count" id="position-count"></span></h2><p>القيمة الحالية والأرباح والخسائر غير المحققة</p></div></header>
+    <div id="position-data"></div>
+  </section>
+  <section id="trades" class="panel">
+    <header class="section-head"><div><h2>نشاط التداول</h2><p>أحدث عمليات التعبئة والأوامر المفتوحة</p></div>
+    <div class="switch" aria-label="نوع النشاط"><button type="button" data-tab="fills" aria-pressed="true">الصفقات المنفّذة</button><button type="button" data-tab="orders" aria-pressed="false">الأوامر المفتوحة</button></div></header>
+    <div id="trade-data"></div>
+  </section>
+</main>
+<footer>Alpaca Paper · لوحة للقراءة فقط</footer>
+</body>
+</html>
