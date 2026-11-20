@@ -27,3 +27,9 @@ In the scanner service's Variables tab, set `ALPACA_API_KEY` and `ALPACA_SECRET_
 ## Railway dashboard
 
 Deploy a separate service from the dashboard branch with start command `python -u dashboard.py` and healthcheck `/health`. Set `DASHBOARD_PASSWORD` and use the username `paper`. The service needs Alpaca Paper keys in `ALPACA_API_KEY` and `ALPACA_SECRET_KEY`. These can be references to the scanner's service variables. The dashboard displays account data, equity history, positions, fills and open orders. All broker requests use GET.
+
+## Automatic Alpaca Paper execution
+
+Run a separate Railway cron service using `python -u paper_auto.py`, `PAPER_AUTO_ENABLED=true`, and the same two Alpaca Paper variables as the scanner. Set restart policy to Never and the UTC schedule to `*/5 13-21 * * 1-5`. It uses Alpaca's regular-session clock and tries new entries from 09:35 to 09:50 New York time against the last completed daily breakout signal. The worker uses fresh IEX quotes to limit the estimated entry price, whole shares and available cash, and Alpaca Paper bracket orders for stop loss and profit targets. The fills therefore differ from the backtest's opening-price assumption.
+
+The worker cancels stale entry orders, reconciles unresolved protective orders, and closes its own remaining long positions after the configured holding period. Fills, working orders and positions are visible in the dashboard. Use Railway logs to check skipped and failed cycles. Set `PAPER_AUTO_ENABLED=false` and redeploy to pause the worker. Existing orders remain with Alpaca Paper when the worker is paused.

@@ -8,3 +8,4 @@ CMD ["python", "-u", "scan.py", "--live", "--today", "--rule", "breakout", "--fe
 
 COPY dashboard.py ./
 COPY dashboard_ui ./dashboard_ui
+COPY paper_auto.py ./
