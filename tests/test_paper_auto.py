@@ -1,10 +1,12 @@
+import io
 import unittest
+from contextlib import redirect_stdout
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import Mock, patch
 
 from alpaca import NY
-from paper_auto import PaperBroker, accept_entries, cycle, entry_order, manage_positions
+from paper_auto import PaperBroker, accept_entries, cycle, entry_order, manage_positions, read_market_clock, watch
 
 
 class PaperAutoTests(unittest.TestCase):
@@ -98,6 +100,45 @@ class PaperAutoTests(unittest.TestCase):
         broker.order.assert_not_called()
         broker.cancel.assert_not_called()
         broker.submit.assert_not_called()
+
+    def test_watch_recovers_from_missing_clock_and_keeps_monitoring_after_close(self):
+        broker = Mock(spec=PaperBroker)
+        stop = Mock()
+        stop.is_set.side_effect = [False, False, False, False, True]
+        closed = {"is_open": False, "timestamp": "2026-11-23T09:20:00-05:00",
+                  "next_open": "2026-11-23T09:30:00-05:00"}
+        opened = {"is_open": True, "timestamp": "2026-11-23T09:31:00-05:00",
+                  "next_close": "2026-11-23T16:00:00-05:00"}
+        output = io.StringIO()
+        with patch("paper_auto.read_market_clock", side_effect=[closed, OSError("connection lost"), opened, closed]), \
+                patch("paper_auto.cycle", side_effect=[None, SystemExit("data unavailable"), None]) as run, \
+                redirect_stdout(output):
+            watch(broker, stop, execute=True)
+        self.assertEqual([call.kwargs["clock"]["is_open"] for call in run.call_args_list], [False, True, False])
+        self.assertEqual(stop.wait.call_count, 4)
+        for line in ("status unknown", "CLOSED", "OPEN", "Monitoring will retry"):
+            self.assertIn(line, output.getvalue())
+
+    def test_monitor_keeps_reading_the_clock_when_orders_are_paused(self):
+        broker = Mock(spec=PaperBroker)
+        stop = Mock()
+        stop.is_set.side_effect = [False, True]
+        opening = self.now.isoformat()
+        clock = {"is_open": True, "timestamp": opening, "next_close": "2026-11-23T16:00:00-05:00"}
+        with patch("paper_auto.read_market_clock", return_value=clock) as read, \
+                patch("paper_auto.cycle") as run, redirect_stdout(io.StringIO()):
+            watch(broker, stop, execute=False)
+        read.assert_called_once_with(broker)
+        run.assert_not_called()
+
+    def test_stale_market_clock_is_rejected(self):
+        broker = Mock(spec=PaperBroker)
+        broker.request.return_value = {
+            "is_open": False, "timestamp": "2025-01-02T08:00:00-05:00",
+            "next_open": "2025-01-02T09:30:00-05:00",
+        }
+        with self.assertRaisesRegex(ValueError, "market clock is stale"):
+            read_market_clock(broker)
 
     def test_disabled_worker_exits_before_creating_an_api_client(self):
         with patch.dict("os.environ", {"PAPER_AUTO_ENABLED": "false"}), patch("sys.argv", ["paper_auto.py"]), \

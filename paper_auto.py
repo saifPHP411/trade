@@ -1,10 +1,14 @@
-"""Run one polling cycle of the unattended Alpaca Paper strategy."""
+"""Execute and monitor the unattended Alpaca Paper strategy."""
 import argparse
 import json
 import os
+import signal
+import time as runtime
 from collections import defaultdict
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
+from functools import lru_cache
+from threading import Event
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, build_opener
@@ -19,6 +23,9 @@ ENTRY_END = time(9, 50)
 TERMINAL = {"filled", "canceled", "expired", "rejected", "replaced"}
 ORDER_LIMIT = 500
 CENT = Decimal("0.01")
+CLOCK_INTERVAL = 30
+ORDER_INTERVAL = 60
+HEARTBEAT_INTERVAL = 60
 
 
 class BrokerError(RuntimeError):
@@ -115,6 +122,7 @@ def accept_entries(account, daily_limit):
             and equity > previous * (1 - d(daily_limit)) and d(account["cash"]) > 0)
 
 
+@lru_cache(maxsize=1)
 def breakout_candidates(symbols, today, previous_session):
     day, cutoff = completed_bar_window()
     if day != previous_session:
@@ -241,7 +249,7 @@ def enter_positions(broker, current, previous_session, settings, account, positi
         print("No unreserved cash for entries.")
         return
 
-    ranked = breakout_candidates(universe(), current.date(), previous_session)
+    ranked = breakout_candidates(tuple(universe()), current.date(), previous_session)
     today_prefix = f"{ENTRY_PREFIX}{current.date():%Y%m%d}-"
     already_attempted = {o["symbol"] for o in history if o["client_order_id"].startswith(today_prefix)}
     available = [item for item in ranked if item[1] not in busy | already_attempted]
@@ -274,8 +282,9 @@ def enter_positions(broker, current, previous_session, settings, account, positi
             break
 
 
-def cycle(broker, check=False):
-    clock = broker.request("/v2/clock")
+def cycle(broker, check=False, *, clock=None):
+    if clock is None:
+        clock = broker.request("/v2/clock")
     current = ny_timestamp(clock["timestamp"])
     if check:
         account = broker.request("/v2/account")
@@ -290,7 +299,6 @@ def cycle(broker, check=False):
                 if is_owned_entry(order) and ny_timestamp(order["submitted_at"]).date() < current.date():
                     broker.cancel(order["id"])
                     print(f"Pre-open cancellation requested: {order['client_order_id']}")
-        print("US regular market is closed.")
         return
     config = rules()
     _, _, _, hold, _, daily_limit, _ = config
@@ -313,14 +321,65 @@ def cycle(broker, check=False):
     enter_positions(broker, current, sessions[-2], config, account, positions, open_orders, history)
 
 
+def read_market_clock(broker):
+    clock = broker.request("/v2/clock")
+    checked = ny_timestamp(clock["timestamp"])
+    if not isinstance(clock["is_open"], bool):
+        raise ValueError("Invalid Alpaca market status.")
+    ny_timestamp(clock["next_close" if clock["is_open"] else "next_open"])
+    if abs((datetime.now(timezone.utc) - checked).total_seconds()) > 90:
+        raise ValueError("Alpaca market clock is stale.")
+    return clock
+
+
+def watch(broker, stop, execute):
+    last_state = None
+    last_order_check = float("-inf")
+    last_heartbeat = float("-inf")
+    while not stop.is_set():
+        try:
+            clock = read_market_clock(broker)
+        except (RuntimeError, ValueError, KeyError, TypeError, OSError) as error:
+            last_state = None
+            print(f"Market status unknown. Orders paused until the next valid clock. {error}")
+        else:
+            tick = runtime.monotonic()
+            state = clock["is_open"]
+            changed = state != last_state
+            if changed or tick - last_heartbeat >= HEARTBEAT_INTERVAL:
+                status = "OPEN" if state else "CLOSED"
+                boundary = "next_close" if state else "next_open"
+                print(f"Market monitor: {status} at {clock['timestamp']}. "
+                      f"{boundary}: {clock[boundary]}. Paper execution: {'enabled' if execute else 'paused'}.")
+                last_heartbeat = tick
+            last_state = state
+            if execute and (changed or tick - last_order_check >= ORDER_INTERVAL):
+                try:
+                    cycle(broker, clock=clock)
+                except (SystemExit, RuntimeError, ValueError, KeyError, TypeError, OSError) as error:
+                    print(f"Paper order cycle failed. Monitoring will retry. {error}")
+                else:
+                    last_order_check = tick
+        stop.wait(CLOCK_INTERVAL)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="verify the Paper API without sending orders")
+    parser.add_argument("--watch", action="store_true", help="keep monitoring the broker clock continuously")
     args = parser.parse_args()
-    if not args.check and os.environ.get("PAPER_AUTO_ENABLED") != "true":
+    enabled = os.environ.get("PAPER_AUTO_ENABLED") == "true"
+    if not (args.check or args.watch or enabled):
         raise SystemExit("Paper auto execution is disabled.")
     try:
-        cycle(PaperBroker(), args.check)
+        broker = PaperBroker()
+        if args.watch and not args.check:
+            stop = Event()
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                signal.signal(sig, lambda *_: stop.set())
+            watch(broker, stop, enabled)
+        else:
+            cycle(broker, args.check)
     except (RuntimeError, ValueError, KeyError, TypeError, OSError) as error:
         raise SystemExit(f"Paper cycle stopped: {error}") from None
 
