@@ -15,10 +15,12 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import backtest
 from research.backtest_100 import stress_rows
+from research.selective_breakout import evaluate as evaluate_selective
 from signals import Bar, candidates, rules, universe
 
 START = date(2021, 7, 23)
 END = date(2026, 7, 22)
+FRESH_END = date(2026, 11, 5)
 TRACKER = "3cb6e8055d0f11ed6efd1d7a43fe3661cdd319ae"
 SPY_BLOB = "fa0fbcf5246f67e0ad62765ada6f2194f6525be8"
 CASH = 50
@@ -42,7 +44,7 @@ def stock_bars(symbol):
         day = row["Date"].date()
         if row["Ticker"] != symbol:
             raise ValueError(f"Unexpected ticker in {symbol} source.")
-        if day <= END:
+        if day <= FRESH_END:
             ratio = row["Adj_Close"] / row["Close"]
             adjusted[day] = Bar(day, *(row[key] * ratio for key in ("Open", "High", "Low", "Close")))
             as_traded[day] = row["Low"] * subsequent_split_factor
@@ -155,15 +157,25 @@ def analyze(prices, raw_lows, symbols):
                 row["profitable_weeks"] = sum(pnl > 1e-12 for pnl in weekly)
                 row["median_week_return_pct"] = round(100 * median(weekly), 4)
             results.append(row)
+    fresh = sorted(day for day in prices[symbols[0]] if END < day <= FRESH_END)
+    if fresh and (fresh[-1] != FRESH_END or any(
+        set(fresh) != {day for day in prices[symbol] if END < day <= FRESH_END} for symbol in symbols
+    )):
+        raise ValueError("Incomplete common sessions in the forward comparison.")
     return {"start": str(START), "end": str(END), "sessions": len(sessions), "stocks": len(symbols),
             "starting_cash_usd": CASH, "per_position_budget_usd": budget, "results": results,
             "allocation_sweep": allocation_sweep(prices, signals, sessions, recent, settings),
             "theoretical_leverage_sweep": leverage_sweep(prices, signals, sessions, recent, settings),
             "isolated_100x_stress": stress_rows(prices, signals, sessions, recent, CASH, settings),
+            "selective_variants": evaluate_selective(prices, symbols, sessions, CASH, settings, fresh=fresh),
             "breakout_candidates": len(opportunities),
             "candidates_with_next_session_low_within_budget": sum(low <= budget for _, _, low in opportunities),
             "cheapest_candidate": {"symbol": cheapest[0], "session": str(cheapest[1]), "low_usd": round(cheapest[2], 2)},
             "minimum_initial_equity_for_cheapest_candidate_before_costs": round(cheapest[2] / settings[0], 2)}
+
+
+def money_or_unavailable(value):
+    return f"${value:.2f}" if value is not None else "—"
 
 
 def main():
@@ -175,6 +187,8 @@ def main():
         sources = list(workers.map(stock_bars, symbols))
     prices = {symbol: history for symbol, history, _ in sources}
     prices["SPY"] = spy_bars()
+    if FRESH_END not in prices[symbols[0]]:
+        raise ValueError("Forward sample is missing its final session.")
     result = analyze(prices, {symbol: lows for symbol, _, lows in sources}, symbols)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(f"### Breakout backtest from ${CASH} ({START} to {END})\n")
@@ -222,6 +236,19 @@ def main():
     print("One long position. Assumed maintenance 0.5%, minimum $1 notional, overnight financing 6.5% APR, "
           "full posted collateral forfeited at liquidation. The protective gate requires the ATR stop "
           "to trigger before the modeled liquidation level. Daily bars cannot resolve intraday order flow.")
+    print("\n### Long-only selective rules from $50, up to two positions")
+    print("| Period | Variant | Cost per side | Final equity | Drawdown | Closed trades | Profit factor | Positive months | SPY final |")
+    print("|---|---|---:|---:|---:|---:|---:|---:|---:|")
+    for row in result["selective_variants"]:
+        print(f"| {row['period']} | {row['variant']} | {row['cost_bps_each_side']} bps | "
+              f"${row['ending_usd']:.2f} | {row['max_drawdown_pct']:.2f}% | {row['closed_trades']} | "
+              f"{row['profit_factor']} | {row['profitable_months']}/{row['months']} | "
+              f"{money_or_unavailable(row['spy_ending_usd'])} |")
+    print("The breadth is the fraction of the same 30 stocks above their 50-session moving average. "
+          "The holdings universe is fixed. The most recent historical period has already been used "
+          "to evaluate the baseline, so those periods are a chronological comparison. "
+          "The forward check covers July 23 to November 5, 2026, beyond the previous replay. "
+          "It stops before inconsistencies in later source bars and has no matched SPY series.")
     print("\nFractional purchases are rounded down to nine decimals and have a $1 stock-value minimum.")
     print("Daily bars model fills and protection. This replay uses the next session's open as its entry "
           "price, while the deployed whole-share executor uses timed limit orders.")

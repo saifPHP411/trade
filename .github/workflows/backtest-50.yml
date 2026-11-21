@@ -7,6 +7,8 @@ on:
       - .github/workflows/backtest-50.yml
       - research/backtest_50.py
       - research/backtest_100.py
+      - research/selective_breakout.py
+      - tests/test_selective_breakout.py
       - backtest.py
       - tests/test_trading.py
   workflow_dispatch:
