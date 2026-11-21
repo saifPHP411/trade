@@ -14,7 +14,7 @@ COST = 0.0005
 
 @dataclass
 class Position:
-    shares: int
+    shares: int | float
     entry_day: date
     session: int
     entry: float
@@ -28,14 +28,14 @@ class Trade:
     symbol: str
     entry_day: date
     exit_day: date
-    shares: int
+    shares: int | float
     entry: float
     exit: float
     reason: str
     pnl: float
 
 
-def simulate(rule, signals, prices, sessions, starting_cash, settings):
+def simulate(rule, signals, prices, sessions, starting_cash, settings, *, fractional=False):
     size, stop, target, hold, cap, daily_limit, _ = settings
     positions, pending, closed, curve = {}, [], [], []
     cash = previous_equity = starting_cash
@@ -69,7 +69,14 @@ def simulate(rule, signals, prices, sessions, starting_cash, settings):
                 continue
             bar = prices[symbol][day]
             cost_per_share = bar.open * (1 + COST)
-            shares = math.floor(opening_equity * size / cost_per_share)
+            allocation = opening_equity * size
+            if fractional:
+                budget = min(allocation, cash)
+                shares = math.floor(budget / cost_per_share * 1_000_000_000) / 1_000_000_000
+                if shares * bar.open < 1:
+                    continue
+            else:
+                shares = math.floor(allocation / cost_per_share)
             stop_price = bar.open - stop * atr
             total = shares * cost_per_share
             if shares > 0 and stop_price > 0 and total <= cash:

@@ -7,6 +7,8 @@ import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from itertools import groupby
+from statistics import median
 from pathlib import Path
 from urllib.request import Request, urlopen
 
@@ -77,14 +79,39 @@ def analyze(prices, raw_lows, symbols):
     if not opportunities:
         raise ValueError("No breakout signals to audit.")
     cheapest = min(opportunities, key=lambda item: item[2])
+    recent = [day for day in sessions if day >= date(2024, 12, 31)]
     results = []
     for bps in (5, 15, 30):
         backtest.COST = bps / 10_000
-        curve, trades = backtest.simulate("breakout", signals, prices, sessions, CASH, settings)
-        final, ret, drawdown, _, _ = backtest.metrics(curve, sessions, CASH)
-        results.append({"cost_bps_each_side": bps, "ending_usd": round(final, 2),
-                        "profit_usd": round(final - CASH, 2), "return_pct": round(100 * ret, 4),
-                        "max_drawdown_pct": round(100 * drawdown, 4), "closed_trades": len(trades)})
+        for fractional in (False, True):
+            curve, trades = backtest.simulate(
+                "breakout", signals, prices, sessions, CASH, settings, fractional=fractional
+            )
+            final, ret, drawdown, _, _ = backtest.metrics(curve, sessions, CASH)
+            row = {"cost_bps_each_side": bps, "size_mode": "fractional" if fractional else "whole",
+                   "ending_usd": round(final, 2), "profit_usd": round(final - CASH, 2),
+                   "return_pct": round(100 * ret, 4), "max_drawdown_pct": round(100 * drawdown, 4),
+                   "closed_trades": len(trades),
+                   "win_rate_pct": round(100 * sum(t.pnl > 0 for t in trades) / len(trades), 2) if trades else None}
+            if fractional:
+                recent_curve, recent_trades = backtest.simulate(
+                    "breakout", signals, prices, recent, CASH, settings, fractional=True
+                )
+                row["recent_2025_ending_usd"] = round(recent_curve[-1], 2)
+                row["recent_2025_closed_trades"] = len(recent_trades)
+                row["spy_full_ending_usd"] = round(backtest.benchmark(prices, ["SPY"], sessions, CASH)[-1], 2)
+                row["spy_recent_ending_usd"] = round(backtest.benchmark(prices, ["SPY"], recent[1:], CASH)[-1], 2)
+                # Rolling within the same portfolio includes carryover positions and marks them at the close.
+                weekly = []
+                previous = CASH
+                for _, days in groupby(zip(sessions, curve), key=lambda item: item[0].isocalendar()[:2]):
+                    _, last = list(days)[-1]
+                    weekly.append(last / previous - 1)
+                    previous = last
+                row["calendar_weeks"] = len(weekly)
+                row["profitable_weeks"] = sum(pnl > 1e-12 for pnl in weekly)
+                row["median_week_return_pct"] = round(100 * median(weekly), 4)
+            results.append(row)
     return {"start": str(START), "end": str(END), "sessions": len(sessions), "stocks": len(symbols),
             "starting_cash_usd": CASH, "per_position_budget_usd": budget, "results": results,
             "breakout_candidates": len(opportunities),
@@ -109,12 +136,20 @@ def main():
     print(f"The initial allocation limit is ${result['per_position_budget_usd']:.2f} per stock. "
           f"Of {result['breakout_candidates']} breakout candidates, "
           f"{result['candidates_with_next_session_low_within_budget']} had a next-day session low within this budget.\n")
-    print("| Cost per side | Final equity | Net profit | Closed trades |")
-    print("|---:|---:|---:|---:|")
+    print("| Size mode | Cost/side | Final equity | Net profit | Closed trades | Win rate | Max drawdown | Recent final | SPY final | Profitable weeks | Median week |")
+    print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for r in result["results"]:
-        print(f"| {r['cost_bps_each_side']} bps | ${r['ending_usd']:.2f} | ${r['profit_usd']:.2f} | {r['closed_trades']} |")
-    print("\nDaily opening-price replay. The paper executor actually uses a limit order near the open. "
-          "The affordability check uses the full next session low as an optimistic bound, with split effects reversed.")
+        def cell(key):
+            return r.get(key) if r.get(key) is not None else "—"
+        weeks = f"{r['profitable_weeks']}/{r['calendar_weeks']}" if "calendar_weeks" in r else "—"
+        print(f"| {r['size_mode']} | {r['cost_bps_each_side']} bps | ${r['ending_usd']:.2f} | "
+              f"${r['profit_usd']:.2f} | {r['closed_trades']} | {cell('win_rate_pct')} | "
+              f"{r['max_drawdown_pct']} | {cell('recent_2025_ending_usd')} | "
+              f"{cell('spy_full_ending_usd')} | {weeks} | {cell('median_week_return_pct')} |")
+    print("\nFractional purchases are rounded down to nine decimals and have a $1 stock-value minimum.")
+    print("Daily bars model fills and protection. This replay uses the next session's open as its entry "
+          "price, while the deployed whole-share executor uses timed limit orders.")
+
 
 
 if __name__ == "__main__":

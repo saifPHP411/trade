@@ -29,6 +29,20 @@ class BacktestRiskTests(unittest.TestCase):
         self.assertEqual(trades[0].shares, 18)
         self.assertLessEqual(trades[0].shares * trades[0].entry * (1 + COST), 2_000)
 
+    def test_fractional_replay_fits_a_ten_dollar_budget(self):
+        self.settings[3] = 1
+        signals = {self.days[0]: [(1, "A", 100, 5, "")]}
+        prices = {"A": self.bars(100, 100, 105, 105)}
+        _, whole = simulate("breakout", signals, prices, self.days, 50, self.settings)
+        curve, trades = simulate("breakout", signals, prices, self.days, 50, self.settings, fractional=True)
+        self.assertEqual(whole, [])
+        self.assertEqual(len(trades), 1)
+        trade = trades[0]
+        self.assertGreater(trade.shares, 0)
+        self.assertLess(trade.shares, 1)
+        self.assertLessEqual(trade.shares * trade.entry * (1 + COST), 10)
+        self.assertAlmostEqual(curve[-1], 50 + trade.pnl)
+
     def test_opening_loss_blocks_new_entry_even_if_losing_position_remains_open(self):
         self.settings[3] = 2
         signals = {
