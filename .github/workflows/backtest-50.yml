@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/backtest-50.yml
       - research/backtest_50.py
+      - research/backtest_100.py
       - backtest.py
       - tests/test_trading.py
   workflow_dispatch:

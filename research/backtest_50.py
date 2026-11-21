@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import backtest
+from research.backtest_100 import stress_rows
 from signals import Bar, candidates, rules, universe
 
 START = date(2021, 7, 23)
@@ -158,6 +159,7 @@ def analyze(prices, raw_lows, symbols):
             "starting_cash_usd": CASH, "per_position_budget_usd": budget, "results": results,
             "allocation_sweep": allocation_sweep(prices, signals, sessions, recent, settings),
             "theoretical_leverage_sweep": leverage_sweep(prices, signals, sessions, recent, settings),
+            "isolated_100x_stress": stress_rows(prices, signals, sessions, recent, CASH, settings),
             "breakout_candidates": len(opportunities),
             "candidates_with_next_session_low_within_budget": sum(low <= budget for _, _, low in opportunities),
             "cheapest_candidate": {"symbol": cheapest[0], "session": str(cheapest[1]), "low_usd": round(cheapest[2], 2)},
@@ -208,6 +210,18 @@ def main():
               f"{row['first_double'] or 'Never'} | {row['closed_trades']} | {row['margin_liquidation_trades']} |")
     print("The 2x hypothetical ignores the actual $2,000 account threshold, applies 6.5% APR on "
           "overnight debit (actual/360), and uses a simplified 30% maintenance check at the open and close.")
+    print("\n### Hypothetical 100x isolated exposure stress test")
+    print("| Period | Fee/side | Equity posted | Stop gate | Ending equity | Drawdown | Entries | Wins | Liquidations | Gate rejections |")
+    print("|---|---:|---:|---|---:|---:|---:|---:|---:|---:|")
+    for row in result["isolated_100x_stress"]:
+        gate = "required" if row["protective_gate"] else "off"
+        rejects = row["rejected_stop_inside_liquidation"] + row["rejected_no_margin_room"]
+        print(f"| {row['period']} | {row['fee_bps_each_side']} bps | {row['collateral_pct']}% | {gate} | "
+              f"${row['ending_usd']:.4f} | {row['max_drawdown_pct']}% | {row['entries']} | "
+              f"{row['wins']} | {row['liquidations']} | {rejects} |")
+    print("One long position. Assumed maintenance 0.5%, minimum $1 notional, overnight financing 6.5% APR, "
+          "full posted collateral forfeited at liquidation. The protective gate requires the ATR stop "
+          "to trigger before the modeled liquidation level. Daily bars cannot resolve intraday order flow.")
     print("\nFractional purchases are rounded down to nine decimals and have a $1 stock-value minimum.")
     print("Daily bars model fills and protection. This replay uses the next session's open as its entry "
           "price, while the deployed whole-share executor uses timed limit orders.")
