@@ -36,7 +36,7 @@ class Trade:
 
 
 def simulate(rule, signals, prices, sessions, starting_cash, settings, *, fractional=False,
-             leverage=1.0, borrow_apr=0.0):
+             leverage=1.0, borrow_apr=0.0, share_scales=None):
     size, stop, target, hold, cap, daily_limit, _ = settings
     positions, pending, closed, curve = {}, [], [], []
     cash = previous_equity = starting_cash
@@ -88,7 +88,9 @@ def simulate(rule, signals, prices, sessions, starting_cash, settings, *, fracti
                 if shares * bar.open < 1:
                     continue
             else:
-                shares = math.floor(allocation / cost_per_share)
+                # Whole units are decided in as-traded dollars, then recorded in adjusted units.
+                scale = share_scales[symbol][day] if share_scales is not None else 1
+                shares = math.floor(allocation / (cost_per_share * scale)) * scale
             stop_price = bar.open - stop * atr
             total = shares * cost_per_share
             if shares > 0 and stop_price > 0 and total <= cash + credit:

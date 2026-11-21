@@ -106,6 +106,24 @@ def leverage_sweep(prices, signals, sessions, recent, settings):
     return rows
 
 
+def replay_100(prices, raw_lows, symbols, sessions, fresh, settings):
+    scales = {
+        symbol: {day: low / prices[symbol][day].low for day, low in raw_lows[symbol].items()}
+        for symbol in symbols
+    }
+    profiles = (
+        ("whole_20", (0.20, 5), scales),
+        ("whole_50", (0.50, 2), scales),
+        ("fractional_50", (0.50, 2), None),
+    )
+    return [
+        {"profile": name, **row}
+        for name, allocation, share_scales in profiles
+        for row in evaluate_selective(prices, symbols, sessions, 100, settings, fresh=fresh,
+                                      allocation=allocation, share_scales=share_scales)
+    ]
+
+
 def analyze(prices, raw_lows, symbols):
     sessions = sorted(day for day in prices["SPY"] if START <= day <= END)
     if not sessions or sessions[0] != START or sessions[-1] != END:
@@ -168,6 +186,7 @@ def analyze(prices, raw_lows, symbols):
             "theoretical_leverage_sweep": leverage_sweep(prices, signals, sessions, recent, settings),
             "isolated_100x_stress": stress_rows(prices, signals, sessions, recent, CASH, settings),
             "selective_variants": evaluate_selective(prices, symbols, sessions, CASH, settings, fresh=fresh),
+            "capital_100": replay_100(prices, raw_lows, symbols, sessions, fresh, settings),
             "breakout_candidates": len(opportunities),
             "candidates_with_next_session_low_within_budget": sum(low <= budget for _, _, low in opportunities),
             "cheapest_candidate": {"symbol": cheapest[0], "session": str(cheapest[1]), "low_usd": round(cheapest[2], 2)},
@@ -249,6 +268,15 @@ def main():
           "to evaluate the baseline, so those periods are a chronological comparison. "
           "The forward check covers July 23 to November 5, 2026, beyond the previous replay. "
           "It stops before inconsistencies in later source bars and has no matched SPY series.")
+    print("\n### $100 strategy replay, three independent starts")
+    print("| Period | Sizing profile | Strategy | Cost/side | Final equity | Drawdown | Closed trades | Profit factor |")
+    print("|---|---|---|---:|---:|---:|---:|---:|")
+    for row in result["capital_100"]:
+        print(f"| {row['period']} | {row['profile']} | {row['variant']} | "
+              f"{row['cost_bps_each_side']} bps | ${row['ending_usd']:.2f} | {row['max_drawdown_pct']:.2f}% | "
+              f"{row['closed_trades']} | {row['profit_factor']} |")
+    print("Whole-share sizing uses split and dividend adjustment factors to recover as-traded entry "
+          "prices from the adjusted series. Held positions use adjusted prices for valuation.")
     print("\nFractional purchases are rounded down to nine decimals and have a $1 stock-value minimum.")
     print("Daily bars model fills and protection. This replay uses the next session's open as its entry "
           "price, while the deployed whole-share executor uses timed limit orders.")

@@ -39,10 +39,10 @@ def daily_variants(prices, symbols):
     return variants
 
 
-def evaluate(prices, symbols, sessions, cash, settings, *, fresh=()):
+def evaluate(prices, symbols, sessions, cash, settings, *, fresh=(), allocation=(0.50, 2), share_scales=None):
     variants = daily_variants(prices, symbols)
     settings = list(settings)
-    settings[0], settings[4] = 0.50, 2
+    settings[0], settings[4] = allocation
     split = date(2025, 1, 1)
     early = [day for day in sessions if day < split]
     later = [early[-1]] + [day for day in sessions if day >= split]
@@ -60,7 +60,8 @@ def evaluate(prices, symbols, sessions, cash, settings, *, fresh=()):
                 if all(day in prices["SPY"] for day in benchmark_days):
                     benchmark_ending = round(backtest.benchmark(prices, ["SPY"], benchmark_days, cash)[-1], 2)
                 for name, signals in variants.items():
-                    curve, trades = backtest.simulate(name, signals, prices, days, cash, settings, fractional=True)
+                    curve, trades = backtest.simulate(name, signals, prices, days, cash, settings,
+                                                      fractional=share_scales is None, share_scales=share_scales)
                     value, ret, dd, _, _ = backtest.metrics(curve, days, cash)
                     gains = sum(t.pnl for t in trades if t.pnl > 0)
                     losses = -sum(t.pnl for t in trades if t.pnl < 0)

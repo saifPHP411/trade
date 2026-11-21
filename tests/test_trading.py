@@ -63,6 +63,21 @@ class BacktestRiskTests(unittest.TestCase):
         self.assertEqual(trades[0].reason, "margin liquidation")
         self.assertAlmostEqual(curve[-1], 10)
 
+    def test_whole_share_replay_applies_as_traded_share_price(self):
+        self.settings[3] = 1
+        signals = {self.days[0]: [(1, "A", 10, 1, "")]}
+        prices = {"A": self.bars(10, 10, 10.5, 10.5)}
+        scale = {"A": {self.days[1]: 5}}
+        curve, trades = simulate("breakout", signals, prices, self.days, 100, self.settings, share_scales=scale)
+        self.assertEqual(curve[-1], 100)
+        self.assertEqual(trades, [])
+        self.settings[0] = 0.51
+        curve, trades = simulate("breakout", signals, prices, self.days, 100, self.settings, share_scales=scale)
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0].shares, 5)  # One original share equals five adjusted units.
+        expected = 100 - 50 * (1 + COST) + 52.5 * (1 - COST)
+        self.assertAlmostEqual(curve[-1], expected)
+
     def test_opening_loss_blocks_new_entry_even_if_losing_position_remains_open(self):
         self.settings[3] = 2
         signals = {
