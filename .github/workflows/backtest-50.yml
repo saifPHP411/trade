@@ -1,0 +1,31 @@
+name: Paper breakout backtest from $50
+
+on:
+  pull_request:
+    branches: [deploy/paper-executor]
+    paths:
+      - .github/workflows/backtest-50.yml
+      - research/backtest_50.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pyarrow
+      - name: Run daily replay and budget audit
+        shell: bash
+        run: python research/backtest_50.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paper-breakout-backtest-50
+          path: backtest-50.json
+          if-no-files-found: error
