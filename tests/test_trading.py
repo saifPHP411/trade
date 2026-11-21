@@ -29,6 +29,55 @@ class BacktestRiskTests(unittest.TestCase):
         self.assertEqual(trades[0].shares, 18)
         self.assertLessEqual(trades[0].shares * trades[0].entry * (1 + COST), 2_000)
 
+    def test_fractional_replay_fits_a_ten_dollar_budget(self):
+        self.settings[3] = 1
+        signals = {self.days[0]: [(1, "A", 100, 5, "")]}
+        prices = {"A": self.bars(100, 100, 105, 105)}
+        _, whole = simulate("breakout", signals, prices, self.days, 50, self.settings)
+        curve, trades = simulate("breakout", signals, prices, self.days, 50, self.settings, fractional=True)
+        self.assertEqual(whole, [])
+        self.assertEqual(len(trades), 1)
+        trade = trades[0]
+        self.assertGreater(trade.shares, 0)
+        self.assertLess(trade.shares, 1)
+        self.assertLessEqual(trade.shares * trade.entry * (1 + COST), 10)
+        self.assertAlmostEqual(curve[-1], 50 + trade.pnl)
+
+    def test_two_times_replay_charges_interest_on_overnight_debit(self):
+        self.settings[0], self.settings[3], self.settings[4] = 1, 1, 1
+        signals = {self.days[0]: [(1, "A", 100, 5, "")]}
+        prices = {"A": self.bars(100, 100, 110, 110)}
+        with patch("backtest.COST", 0):
+            curve, trades = simulate("breakout", signals, prices, self.days, 50, self.settings,
+                                     fractional=True, leverage=2, borrow_apr=0.36)
+        self.assertEqual(trades[0].shares, 1)
+        self.assertAlmostEqual(curve[-1], 59.95)
+
+    def test_two_times_replay_can_liquidate_on_a_gap(self):
+        self.settings[0], self.settings[4] = 1, 1
+        signals = {self.days[0]: [(1, "A", 100, 40, "")]}
+        prices = {"A": self.bars(100, 100, 60, 60)}
+        with patch("backtest.COST", 0):
+            curve, trades = simulate("breakout", signals, prices, self.days, 50, self.settings,
+                                     fractional=True, leverage=2)
+        self.assertEqual(trades[0].reason, "margin liquidation")
+        self.assertAlmostEqual(curve[-1], 10)
+
+    def test_whole_share_replay_applies_as_traded_share_price(self):
+        self.settings[3] = 1
+        signals = {self.days[0]: [(1, "A", 10, 1, "")]}
+        prices = {"A": self.bars(10, 10, 10.5, 10.5)}
+        scale = {"A": {self.days[1]: 5}}
+        curve, trades = simulate("breakout", signals, prices, self.days, 100, self.settings, share_scales=scale)
+        self.assertEqual(curve[-1], 100)
+        self.assertEqual(trades, [])
+        self.settings[0] = 0.51
+        curve, trades = simulate("breakout", signals, prices, self.days, 100, self.settings, share_scales=scale)
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0].shares, 5)  # One original share equals five adjusted units.
+        expected = 100 - 50 * (1 + COST) + 52.5 * (1 - COST)
+        self.assertAlmostEqual(curve[-1], expected)
+
     def test_opening_loss_blocks_new_entry_even_if_losing_position_remains_open(self):
         self.settings[3] = 2
         signals = {
