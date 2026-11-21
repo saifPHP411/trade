@@ -61,6 +61,26 @@ def spy_bars():
     return bars
 
 
+def allocation_sweep(prices, signals, sessions, recent, settings):
+    results = []
+    for bps in (5, 15, 30):
+        backtest.COST = bps / 10_000
+        for size, cap in ((0.20, 5), (0.33, 3), (0.50, 2), (1.00, 1)):
+            config = list(settings)
+            config[0], config[4] = size, cap
+            row = {"position_allocation_pct": round(size * 100), "max_positions": cap,
+                   "cost_bps_each_side": bps}
+            for name, period in (("full", sessions), ("recent", recent)):
+                curve, trades = backtest.simulate("breakout", signals, prices, period,
+                                                  CASH, config, fractional=True)
+                ending, ret, drawdown, _, _ = backtest.metrics(curve, period, CASH)
+                row[name] = {"ending_usd": round(ending, 2), "profit_usd": round(ending - CASH, 2),
+                             "return_pct": round(ret * 100, 2),
+                             "max_drawdown_pct": round(drawdown * 100, 2), "closed_trades": len(trades)}
+            results.append(row)
+    return results
+
+
 def analyze(prices, raw_lows, symbols):
     sessions = sorted(day for day in prices["SPY"] if START <= day <= END)
     if not sessions or sessions[0] != START or sessions[-1] != END:
@@ -114,6 +134,7 @@ def analyze(prices, raw_lows, symbols):
             results.append(row)
     return {"start": str(START), "end": str(END), "sessions": len(sessions), "stocks": len(symbols),
             "starting_cash_usd": CASH, "per_position_budget_usd": budget, "results": results,
+            "allocation_sweep": allocation_sweep(prices, signals, sessions, recent, settings),
             "breakout_candidates": len(opportunities),
             "candidates_with_next_session_low_within_budget": sum(low <= budget for _, _, low in opportunities),
             "cheapest_candidate": {"symbol": cheapest[0], "session": str(cheapest[1]), "low_usd": round(cheapest[2], 2)},
@@ -146,6 +167,15 @@ def main():
               f"${r['profit_usd']:.2f} | {r['closed_trades']} | {cell('win_rate_pct')} | "
               f"{r['max_drawdown_pct']} | {cell('recent_2025_ending_usd')} | "
               f"{cell('spy_full_ending_usd')} | {weeks} | {cell('median_week_return_pct')} |")
+    print("\n### Fractional allocation sensitivity")
+    print("| Allocation per position | Max positions | Cost per side | Full final | Full drawdown | Recent final | Recent drawdown | Full trades | Recent trades |")
+    print("|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for row in result["allocation_sweep"]:
+        full, recent = row["full"], row["recent"]
+        print(f"| {row['position_allocation_pct']}% | {row['max_positions']} | {row['cost_bps_each_side']} bps | "
+              f"${full['ending_usd']:.2f} | {full['max_drawdown_pct']:.2f}% | "
+              f"${recent['ending_usd']:.2f} | {recent['max_drawdown_pct']:.2f}% | "
+              f"{full['closed_trades']} | {recent['closed_trades']} |")
     print("\nFractional purchases are rounded down to nine decimals and have a $1 stock-value minimum.")
     print("Daily bars model fills and protection. This replay uses the next session's open as its entry "
           "price, while the deployed whole-share executor uses timed limit orders.")
