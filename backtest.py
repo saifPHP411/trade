@@ -35,7 +35,8 @@ class Trade:
     pnl: float
 
 
-def simulate(rule, signals, prices, sessions, starting_cash, settings, *, fractional=False):
+def simulate(rule, signals, prices, sessions, starting_cash, settings, *, fractional=False,
+             leverage=1.0, borrow_apr=0.0):
     size, stop, target, hold, cap, daily_limit, _ = settings
     positions, pending, closed, curve = {}, [], [], []
     cash = previous_equity = starting_cash
@@ -49,17 +50,28 @@ def simulate(rule, signals, prices, sessions, starting_cash, settings, *, fracti
         closed.append(Trade(rule, symbol, position.entry_day, day, position.shares,
                             position.entry, price, reason, pnl))
 
+    def check_maintenance(day, field):
+        exposure = sum(position.shares * getattr(prices[symbol][day], field)
+                       for symbol, position in positions.items())
+        if leverage > 1 and exposure > 0 and cash + exposure < 0.30 * exposure:
+            for symbol in list(positions):
+                sell(symbol, getattr(prices[symbol][day], field), day, "margin liquidation")
+            return 0
+        return exposure
+
     for index, day in enumerate(sessions):
+        if index and cash < 0 and borrow_apr:
+            days = (day - sessions[index - 1]).days
+            cash *= 1 + borrow_apr * days / 360
         for symbol, position in list(positions.items()):
             bar = prices[symbol][day]
             if index - position.session >= hold:
                 sell(symbol, bar.open, day, "time limit")
             elif bar.open <= position.stop or bar.open >= position.target:
                 sell(symbol, bar.open, day, "gap through stop or target")
-        opening_equity = cash + sum(
-            position.shares * prices[symbol][day].open
-            for symbol, position in positions.items()
-        )
+        opening_exposure = check_maintenance(day, "open")
+        opening_equity = cash + opening_exposure
+        credit = max(opening_equity, 0) * (leverage - 1)
         if opening_equity <= previous_equity * (1 - daily_limit):
             pending = []
         for _, symbol, _, atr, _ in pending:
@@ -69,9 +81,9 @@ def simulate(rule, signals, prices, sessions, starting_cash, settings, *, fracti
                 continue
             bar = prices[symbol][day]
             cost_per_share = bar.open * (1 + COST)
-            allocation = opening_equity * size
+            allocation = opening_equity * size * leverage
             if fractional:
-                budget = min(allocation, cash)
+                budget = min(allocation, cash + credit)
                 shares = math.floor(budget / cost_per_share * 1_000_000_000) / 1_000_000_000
                 if shares * bar.open < 1:
                     continue
@@ -79,7 +91,7 @@ def simulate(rule, signals, prices, sessions, starting_cash, settings, *, fracti
                 shares = math.floor(allocation / cost_per_share)
             stop_price = bar.open - stop * atr
             total = shares * cost_per_share
-            if shares > 0 and stop_price > 0 and total <= cash:
+            if shares > 0 and stop_price > 0 and total <= cash + credit:
                 positions[symbol] = Position(shares, day, index, bar.open, stop_price, bar.open + target * atr)
                 cash -= total
         for symbol, position in list(positions.items()):
@@ -88,7 +100,8 @@ def simulate(rule, signals, prices, sessions, starting_cash, settings, *, fracti
                 sell(symbol, position.stop, day, "stop")
             elif bar.high >= position.target:
                 sell(symbol, position.target, day, "target")
-        equity = cash + sum(p.shares * prices[symbol][day].close for symbol, p in positions.items())
+        equity = check_maintenance(day, "close")
+        equity += cash
         curve.append(equity)
         pending = [
             item for item in signals.get(day, []) if item[1] not in positions
@@ -112,7 +125,7 @@ def metrics(curve, sessions, cash):
     for day, value in zip(sessions, curve):
         high = max(high, value)
         drawdown = min(drawdown, value / high - 1)
-        daily.append(value / previous - 1)
+        daily.append(value / previous - 1 if previous > 0 else 0)
         yearly.setdefault(day.year, [previous, value])[1] = value
         previous = value
     deviation = statistics.stdev(daily) if len(daily) > 1 else 0

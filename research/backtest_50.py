@@ -81,6 +81,28 @@ def allocation_sweep(prices, signals, sessions, recent, settings):
     return results
 
 
+def leverage_sweep(prices, signals, sessions, recent, settings):
+    config = list(settings)
+    config[0], config[4] = 0.50, 2
+    rows = []
+    for bps in (15, 30):
+        backtest.COST = bps / 10_000
+        for leverage in (1, 2):
+            for name, period in (("full", sessions), ("recent", recent)):
+                curve, trades = backtest.simulate(
+                    "breakout", signals, prices, period, CASH, config,
+                    fractional=True, leverage=leverage, borrow_apr=0.065 if leverage == 2 else 0,
+                )
+                final, ret, dd, _, _ = backtest.metrics(curve, period, CASH)
+                first_double = next((str(day) for day, value in zip(period, curve) if value >= 2 * CASH), None)
+                rows.append({"period": name, "leverage": leverage, "cost_bps_each_side": bps,
+                             "ending_usd": round(final, 2), "return_pct": round(ret * 100, 2),
+                             "max_drawdown_pct": round(dd * 100, 2), "closed_trades": len(trades),
+                             "first_double": first_double,
+                             "margin_liquidation_trades": sum(t.reason == "margin liquidation" for t in trades)})
+    return rows
+
+
 def analyze(prices, raw_lows, symbols):
     sessions = sorted(day for day in prices["SPY"] if START <= day <= END)
     if not sessions or sessions[0] != START or sessions[-1] != END:
@@ -135,6 +157,7 @@ def analyze(prices, raw_lows, symbols):
     return {"start": str(START), "end": str(END), "sessions": len(sessions), "stocks": len(symbols),
             "starting_cash_usd": CASH, "per_position_budget_usd": budget, "results": results,
             "allocation_sweep": allocation_sweep(prices, signals, sessions, recent, settings),
+            "theoretical_leverage_sweep": leverage_sweep(prices, signals, sessions, recent, settings),
             "breakout_candidates": len(opportunities),
             "candidates_with_next_session_low_within_budget": sum(low <= budget for _, _, low in opportunities),
             "cheapest_candidate": {"symbol": cheapest[0], "session": str(cheapest[1]), "low_usd": round(cheapest[2], 2)},
@@ -176,6 +199,15 @@ def main():
               f"${full['ending_usd']:.2f} | {full['max_drawdown_pct']:.2f}% | "
               f"${recent['ending_usd']:.2f} | {recent['max_drawdown_pct']:.2f}% | "
               f"{full['closed_trades']} | {recent['closed_trades']} |")
+    print("\n### Theoretical margin replay at 50% of buying power per position")
+    print("| Period | Exposure cap | Cost per side | Final equity | Drawdown | First $100 close | Trades | Forced exits |")
+    print("|---|---:|---:|---:|---:|---|---:|---:|")
+    for row in result["theoretical_leverage_sweep"]:
+        print(f"| {row['period']} | {row['leverage']}x | {row['cost_bps_each_side']} bps | "
+              f"${row['ending_usd']:.2f} | {row['max_drawdown_pct']:.2f}% | "
+              f"{row['first_double'] or 'Never'} | {row['closed_trades']} | {row['margin_liquidation_trades']} |")
+    print("The 2x hypothetical ignores the actual $2,000 account threshold, applies 6.5% APR on "
+          "overnight debit (actual/360), and uses a simplified 30% maintenance check at the open and close.")
     print("\nFractional purchases are rounded down to nine decimals and have a $1 stock-value minimum.")
     print("Daily bars model fills and protection. This replay uses the next session's open as its entry "
           "price, while the deployed whole-share executor uses timed limit orders.")

@@ -43,6 +43,26 @@ class BacktestRiskTests(unittest.TestCase):
         self.assertLessEqual(trade.shares * trade.entry * (1 + COST), 10)
         self.assertAlmostEqual(curve[-1], 50 + trade.pnl)
 
+    def test_two_times_replay_charges_interest_on_overnight_debit(self):
+        self.settings[0], self.settings[3], self.settings[4] = 1, 1, 1
+        signals = {self.days[0]: [(1, "A", 100, 5, "")]}
+        prices = {"A": self.bars(100, 100, 110, 110)}
+        with patch("backtest.COST", 0):
+            curve, trades = simulate("breakout", signals, prices, self.days, 50, self.settings,
+                                     fractional=True, leverage=2, borrow_apr=0.36)
+        self.assertEqual(trades[0].shares, 1)
+        self.assertAlmostEqual(curve[-1], 59.95)
+
+    def test_two_times_replay_can_liquidate_on_a_gap(self):
+        self.settings[0], self.settings[4] = 1, 1
+        signals = {self.days[0]: [(1, "A", 100, 40, "")]}
+        prices = {"A": self.bars(100, 100, 60, 60)}
+        with patch("backtest.COST", 0):
+            curve, trades = simulate("breakout", signals, prices, self.days, 50, self.settings,
+                                     fractional=True, leverage=2)
+        self.assertEqual(trades[0].reason, "margin liquidation")
+        self.assertAlmostEqual(curve[-1], 10)
+
     def test_opening_loss_blocks_new_entry_even_if_losing_position_remains_open(self):
         self.settings[3] = 2
         signals = {
